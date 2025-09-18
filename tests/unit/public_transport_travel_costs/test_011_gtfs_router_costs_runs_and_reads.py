@@ -3,34 +3,40 @@ from pathlib import Path
 import pandas as pd
 
 def test_gtfs_router_costs_runs_and_reads(fake_transport_zones, monkeypatch, tmp_path):
-    import mobility.public_transport_travel_costs as mod
+    import mobility.public_transport_travel_costs as module
 
-    class TinyGTFS:
-        def __init__(self, tz): pass
-        def get(self): return "/fake/router"
-    monkeypatch.setattr(mod, "GTFS", TinyGTFS)
+    class FakeGTFS:
+        def __init__(self, transport_zones): 
+            pass
+        def get(self): 
+            return "/fake/router"
+    monkeypatch.setattr(module, "GTFS", FakeGTFS)
 
-    calls = {}
-    class TinyRScript:
-        def __init__(self, script_path): calls["script_path"] = script_path
-        def run(self, args): calls["args"] = args
-    monkeypatch.setattr(mod, "RScript", TinyRScript)
+    call_log = {}
+    class FakeRScript:
+        def __init__(self, script_path):
+            call_log["script_path"] = script_path
+        def run(self, args):
+            call_log["args"] = args
+    monkeypatch.setattr(module, "RScript", FakeRScript)
 
-    def files_stub(pkg):
-        return SimpleNamespace(joinpath=lambda p: tmp_path / p)
-    monkeypatch.setattr(mod.resources, "files", files_stub)
+    def resources_files_stub(package_name):
+        return SimpleNamespace(joinpath=lambda relative_path: tmp_path / relative_path)
+    monkeypatch.setattr(module.resources, "files", resources_files_stub)
 
-    df_expected = pd.DataFrame({"cost":[42]})
-    monkeypatch.setattr(pd, "read_parquet", lambda p: df_expected)
+    expected_dataframe = pd.DataFrame({"cost": [42]})
+    monkeypatch.setattr(pd, "read_parquet", lambda path: expected_dataframe)
 
-    pt = mod.PublicTransportTravelCosts(fake_transport_zones)
-    out = pt.gtfs_router_costs(pt.inputs["transport_zones"], pt.inputs["gtfs"])
-    assert out.equals(df_expected)
+    public_transport_travel_costs = module.PublicTransportTravelCosts(fake_transport_zones)
+    result_dataframe = public_transport_travel_costs.gtfs_router_costs(
+        public_transport_travel_costs.inputs["transport_zones"],
+        public_transport_travel_costs.inputs["gtfs"],
+    )
+    assert result_dataframe.equals(expected_dataframe)
 
-    # Robust path checks
-    assert Path(calls["script_path"]).name == "prepare_public_transport_costs.R"
-    tz_path, router, route_types, out_path = calls["args"]
-    assert Path(tz_path).name == "transport_zones.parquet"
-    assert router == "/fake/router"
-    assert Path(route_types).parts[-3:] == ("data","gtfs","gtfs_route_types.xlsx")
-    assert Path(out_path).name == "public_transport_travel_costs.parquet"
+    assert Path(call_log["script_path"]).name == "prepare_public_transport_costs.R"
+    transport_zones_path, gtfs_router_path, route_types_path, output_path = call_log["args"]
+    assert Path(transport_zones_path).name == "transport_zones.parquet"
+    assert gtfs_router_path == "/fake/router"
+    assert Path(route_types_path).parts[-3:] == ("data", "gtfs", "gtfs_route_types.xlsx")
+    assert Path(output_path).name == "public_transport_travel_costs.parquet"
