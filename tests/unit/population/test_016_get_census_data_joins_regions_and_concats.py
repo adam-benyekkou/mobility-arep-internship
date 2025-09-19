@@ -8,7 +8,7 @@ def test_get_census_data_joins_regions_and_concats(fake_transport_zones_asset, t
     
     regions_dataframe = pd.DataFrame({"INSEE_REG": ["R1", "R2"], "geometry": [None, None]})
 
-    def fake_sjoin(left, right, how="left", predicate="intersects"):
+    def fake_spatial_join(left, right, how="left", predicate="intersects"):
         dataframe = left.copy()
         dataframe["INSEE_REG"] = ["R1", "R2"][: len(dataframe)]
         return dataframe
@@ -29,7 +29,7 @@ def test_get_census_data_joins_regions_and_concats(fake_transport_zones_asset, t
             )
 
     monkeypatch.setattr(mod, "get_french_regions_boundaries", lambda: regions_dataframe)
-    monkeypatch.setattr(gpd, "sjoin", fake_sjoin)
+    monkeypatch.setattr(gpd, "sjoin", fake_spatial_join)
     monkeypatch.setattr(mod, "CensusLocalizedIndividuals", FakeCensusLocalizedIndividuals)
 
     population = mod.Population(fake_transport_zones_asset, sample_size=10)
