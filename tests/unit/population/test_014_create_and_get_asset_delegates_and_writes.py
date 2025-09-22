@@ -1,14 +1,14 @@
 import pandas as pd
 
 def test_create_and_get_asset_delegates_and_writes(fake_transport_zones_asset, monkeypatch):
-    import mobility.population as module
+    import mobility.population as mod
 
-    population = module.Population(fake_transport_zones_asset, sample_size=5)
+    population = mod.Population(fake_transport_zones_asset, sample_size=5)
 
     # Fake returns for internal steps
-    sample_sizes_df = pd.DataFrame({"admin_id": ["C1"], "n_persons": [2], "transport_zone_id": [101]})
+    sample_sizes_dataframe = pd.DataFrame({"admin_id": ["C1"], "n_persons": [2], "transport_zone_id": [101]})
     dummy_census = object()  # anything, it won't be used because we stub get_individuals
-    individuals_df = pd.DataFrame({
+    individuals_dataframe = pd.DataFrame({
         "age": [30],
         "socio_pro_category": ["A"],
         "ref_pers_socio_pro_category": ["B"],
@@ -18,9 +18,9 @@ def test_create_and_get_asset_delegates_and_writes(fake_transport_zones_asset, m
         "individual_id": ["id-1"],
     })
 
-    population.get_sample_sizes = lambda tz, ss: sample_sizes_df
-    population.get_census_data = lambda tz: dummy_census
-    population.get_individuals = lambda ss, cd: individuals_df
+    population.get_sample_sizes = lambda *_: sample_sizes_dataframe
+    population.get_census_data = lambda *_: dummy_census
+    population.get_individuals = lambda *_: individuals_dataframe
 
     written = {}
     def fake_to_parquet(self, path, *a, **k):
@@ -28,5 +28,5 @@ def test_create_and_get_asset_delegates_and_writes(fake_transport_zones_asset, m
     monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet, raising=True)
 
     result = population.create_and_get_asset()
-    assert result.equals(individuals_df)
+    assert result.equals(individuals_dataframe)
     assert written["path"].endswith("population.parquet")
