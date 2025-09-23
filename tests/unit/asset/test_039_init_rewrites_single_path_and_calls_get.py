@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 def test_init_rewrites_single_path_and_calls_get(AssetImpl, simple_inputs, cache_file, monkeypatch):
     # Force a deterministic hash so we can assert file names easily
     monkeypatch.setattr(AssetImpl, "compute_inputs_hash", lambda self: "hash123")
