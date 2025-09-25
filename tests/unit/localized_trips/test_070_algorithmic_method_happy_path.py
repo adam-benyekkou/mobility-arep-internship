@@ -1,4 +1,3 @@
-# tests/unit/mobility/localized_trips/test_004_algorithmic_method_happy_path.py
 import pytest
 import pandas as pandas
 from mobility.localized_trips import LocalizedTrips

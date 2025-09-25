@@ -1,4 +1,3 @@
-# tests/unit/mobility/localized_trips/test_002_get_cached_asset_reads_parquet.py
 import pandas as pandas
 from mobility.localized_trips import LocalizedTrips
 

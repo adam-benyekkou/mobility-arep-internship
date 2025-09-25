@@ -1,4 +1,3 @@
-# tests/unit/mobility/localized_trips/test_001_init_builds_inputs_and_cache.py
 from pathlib import Path
 from mobility.localized_trips import LocalizedTrips
 

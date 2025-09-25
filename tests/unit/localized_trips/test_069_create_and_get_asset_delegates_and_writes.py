@@ -1,4 +1,3 @@
-# tests/unit/mobility/localized_trips/test_003_create_and_get_asset_delegates_and_writes.py
 import pandas as pandas
 from mobility.localized_trips import LocalizedTrips
 
