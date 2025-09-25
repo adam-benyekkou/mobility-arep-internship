@@ -1,210 +1,176 @@
 import os
-import io
-import json
-import types
 import pathlib
+import types
 import builtins
-import contextlib
 
 import pytest
-import pandas as pd
-import numpy as np
+import pandas as pandas
+import numpy as numpy
 
-# ===============================
-# Core environment + path helpers
-# ===============================
+# ===========================================================
+# Project directory fixture: sets up environment variables
+# ===========================================================
 
 @pytest.fixture(scope="session")
 def fake_inputs_hash():
-    # 32 hex chars; used to prefix cache file names
     return "deadbeefdeadbeefdeadbeefdeadbeef"
 
 
 @pytest.fixture(scope="session")
 def project_dir(tmp_path_factory):
-    # Per your spec: use a pytest tmp_path and set env var
-    path = tmp_path_factory.mktemp("mobility_project_data")
-    os.environ["MOBILITY_PROJECT_DATA_FOLDER"] = str(path)
-    # The module under test also uses this one; point it to tmp as well
-    package_data = tmp_path_factory.mktemp("mobility_package_data")
-    os.environ["MOBILITY_PACKAGE_DATA_FOLDER"] = str(package_data)
-    # Ensure the gtfs subfolder exists for metadata and downloads
+    project_data_directory = tmp_path_factory.mktemp("mobility_project_data")
+    os.environ["MOBILITY_PROJECT_DATA_FOLDER"] = str(project_data_directory)
+
+    package_data_directory = tmp_path_factory.mktemp("mobility_package_data")
+    os.environ["MOBILITY_PACKAGE_DATA_FOLDER"] = str(package_data_directory)
+
     (pathlib.Path(os.environ["MOBILITY_PACKAGE_DATA_FOLDER"]) / "gtfs").mkdir(parents=True, exist_ok=True)
+
     return pathlib.Path(os.environ["MOBILITY_PROJECT_DATA_FOLDER"])
 
-
-# =====================================
-# Patch Asset.__init__ to avoid .get()
-# =====================================
+# ===========================================================
+# Patch Asset.__init__ so it does not call .get()
+# ===========================================================
 
 @pytest.fixture(autouse=True)
 def patch_asset_init(monkeypatch, project_dir, fake_inputs_hash):
     """
-    Stub mobility.asset.Asset.__init__ so it does NOT call .get().
-    It should only set:
-      - self.inputs
-      - self.cache_path  -> <project_dir>/<fake_inputs_hash>-<filename>
-      - self.hash_path   -> <project_dir>/<fake_inputs_hash>.sha1
-      - self.inputs_hash -> fake_inputs_hash
+    Replace mobility.asset.Asset.__init__ to avoid calling .get().
+    It simply sets: inputs, cache_path, hash_path, inputs_hash.
     """
     try:
-        import mobility.asset  # import here so tests that do not import mobility.* still succeed
+        import mobility.asset
     except Exception:
-        # If the package path doesn't exist yet for some reason, create a dummy module shape
-        mobility = types.SimpleNamespace()
-        mobility.asset = types.SimpleNamespace()
-        def _noop(*args, **kwargs): ...
-        mobility.asset.Asset = type("Asset", (), {"__init__": _noop})
-        builtins.__dict__.setdefault("mobility", mobility)
+        mobility_module = types.SimpleNamespace()
+        mobility_module.asset = types.SimpleNamespace()
+        def dummy_init(*args, **kwargs): ...
+        mobility_module.asset.Asset = type("Asset", (), {"__init__": dummy_init})
+        builtins.__dict__.setdefault("mobility", mobility_module)
 
-    def fake_asset_init(self, inputs, cache_path):
-        # cache_path is a pathlib.Path; only use the name to construct the hashed file
-        base_name = pathlib.Path(cache_path).name
-        hashed_name = f"{fake_inputs_hash}-{base_name}"
-        self.inputs = inputs
+    def fake_asset_init(self, provided_inputs, provided_cache_path):
+        base_filename = pathlib.Path(provided_cache_path).name
+        hashed_filename = f"{fake_inputs_hash}-{base_filename}"
+        self.inputs = provided_inputs
         self.inputs_hash = fake_inputs_hash
-        self.cache_path = project_dir / hashed_name
+        self.cache_path = project_dir / hashed_filename
         self.hash_path = project_dir / f"{fake_inputs_hash}.sha1"
 
     monkeypatch.setattr("mobility.asset.Asset.__init__", fake_asset_init, raising=True)
 
-
-# ====================================
-# No-op rich.progress.Progress fixture
-# ====================================
+# ===========================================================
+# Patch rich.progress.Progress to no-op
+# ===========================================================
 
 @pytest.fixture(autouse=True)
 def no_op_progress(monkeypatch):
-    """Stub rich.progress.Progress to a no-op context manager and object."""
     try:
-        import rich.progress as rp
+        import rich.progress as rich_progress_module
     except Exception:
-        return  # If rich is not importable in the environment, nothing to do
+        return
 
-    class _NoOpProgress:
+    class NoOpProgressClass:
         def __init__(self, *args, **kwargs): ...
         def __enter__(self): return self
-        def __exit__(self, exc_type, exc, tb): return False
-        def add_task(self, *_, **__): return 0
-        def update(self, *_, **__): ...
-        def advance(self, *_, **__): ...
-        def track(self, iterable, *args, **kwargs): 
-            for item in iterable:
-                yield item
+        def __exit__(self, exc_type, exc_value, traceback): return False
+        def add_task(self, *args, **kwargs): return 0
+        def update(self, *args, **kwargs): ...
+        def advance(self, *args, **kwargs): ...
+        def track(self, iterable, *args, **kwargs):
+            for element in iterable:
+                yield element
 
-    monkeypatch.setattr(rp, "Progress", _NoOpProgress, raising=True)
+    monkeypatch.setattr(rich_progress_module, "Progress", NoOpProgressClass, raising=True)
 
-
-# ========================================================
-# Wrap NumPy private _methods to ignore _NoValue sentinel
-# (prevents pandas/NumPy _NoValueType crash in some flows)
-# ========================================================
+# ===========================================================
+# Patch numpy._methods._sum / _amax to ignore _NoValue sentinel
+# ===========================================================
 
 @pytest.fixture(autouse=True)
-def patch_numpy__methods(monkeypatch):
-    # Only patch if the objects exist
-    if hasattr(np, "_NoValue"):
-        _NoValue = np._NoValue
-    else:
-        class _NoValueType: 
-            pass
-        _NoValue = _NoValueType()
+def patch_numpy_private_methods(monkeypatch):
+    sentinel_value = getattr(numpy, "_NoValue", object())
+    if hasattr(numpy, "_methods"):
+        numpy_methods_module = numpy._methods
 
-    if hasattr(np, "_methods"):
-        _methods = np._methods
-        if hasattr(_methods, "_sum"):
-            original_sum = _methods._sum
+        if hasattr(numpy_methods_module, "_sum"):
+            original_sum_function = numpy_methods_module._sum
 
-            def wrapped_sum(a, axis=_NoValue, dtype=_NoValue, out=_NoValue, keepdims=False, initial=_NoValue, where=True):
-                # Replace sentinel parameters with None or defaults acceptable by original function
-                axis = None if axis is _NoValue else axis
-                dtype = None if dtype is _NoValue else dtype
-                out = None if out is _NoValue else out
-                initial = None if initial is _NoValue else initial
-                return original_sum(a, axis=axis, dtype=dtype, out=out, keepdims=keepdims, initial=initial, where=where)
+            def wrapped_sum_function(array_like, axis=sentinel_value, dtype=sentinel_value,
+                                     out=sentinel_value, keepdims=False, initial=sentinel_value, where=True):
+                axis = None if axis is sentinel_value else axis
+                dtype = None if dtype is sentinel_value else dtype
+                out = None if out is sentinel_value else out
+                initial = None if initial is sentinel_value else initial
+                return original_sum_function(array_like, axis=axis, dtype=dtype, out=out,
+                                             keepdims=keepdims, initial=initial, where=where)
 
-            monkeypatch.setattr(_methods, "_sum", wrapped_sum, raising=True)
+            monkeypatch.setattr(numpy_methods_module, "_sum", wrapped_sum_function, raising=True)
 
-        if hasattr(_methods, "_amax"):
-            original_amax = _methods._amax
+        if hasattr(numpy_methods_module, "_amax"):
+            original_amax_function = numpy_methods_module._amax
 
-            def wrapped_amax(a, axis=_NoValue, out=_NoValue, keepdims=False, initial=_NoValue, where=True):
-                axis = None if axis is _NoValue else axis
-                out = None if out is _NoValue else out
-                initial = None if initial is _NoValue else initial
-                return original_amax(a, axis=axis, out=out, keepdims=keepdims, initial=initial, where=where)
+            def wrapped_amax_function(array_like, axis=sentinel_value, out=sentinel_value,
+                                      keepdims=False, initial=sentinel_value, where=True):
+                axis = None if axis is sentinel_value else axis
+                out = None if out is sentinel_value else out
+                initial = None if initial is sentinel_value else initial
+                return original_amax_function(array_like, axis=axis, out=out,
+                                              keepdims=keepdims, initial=initial, where=where)
 
-            monkeypatch.setattr(_methods, "_amax", wrapped_amax, raising=True)
+            monkeypatch.setattr(numpy_methods_module, "_amax", wrapped_amax_function, raising=True)
 
-
-# ==========================================
-# Parquet stubs (opt-in use inside each test)
-# ==========================================
+# ===========================================================
+# Parquet stubs helper fixture
+# ===========================================================
 
 @pytest.fixture
 def parquet_stubs(monkeypatch):
-    """
-    Provide helpers to monkeypatch parquet IO for tests that need it.
-    Usage within a test:
-      rp = parquet_stubs["set_read"](lambda path: df)
-      tp = parquet_stubs["set_write"](capture_list)
-    """
-    captured_write_paths = []
-    read_impl = {"fn": None}
+    captured_written_paths = []
+    read_function_container = {"function": None}
 
-    def set_read(fn):
-        read_impl["fn"] = fn
-        monkeypatch.setattr(pd, "read_parquet", lambda path, *a, **k: fn(path), raising=True)
+    def set_read_function(read_function):
+        read_function_container["function"] = read_function
+        monkeypatch.setattr(pandas, "read_parquet", lambda path, *args, **kwargs: read_function(path), raising=True)
 
-    def set_write(capture_list=None):
-        def to_parquet(self, path, *args, **kwargs):
-            if capture_list is not None:
-                capture_list.append(path)
-            return self  # behave like a no-op writer for tests
-        monkeypatch.setattr(pd.DataFrame, "to_parquet", to_parquet, raising=True)
+    def set_write_function(captured_list=None):
+        def fake_to_parquet_method(self, path, *args, **kwargs):
+            if captured_list is not None:
+                captured_list.append(path)
+            return self
+        monkeypatch.setattr(pandas.DataFrame, "to_parquet", fake_to_parquet_method, raising=True)
 
-    return {"set_read": set_read, "set_write": set_write}
+    return {"set_read": set_read_function, "set_write": set_write_function}
 
-
-# ==================================
-# Deterministic shortuuid (optional)
-# ==================================
+# ===========================================================
+# Deterministic shortuuid helper
+# ===========================================================
 
 @pytest.fixture
 def deterministic_shortuuid(monkeypatch):
     try:
-        import shortuuid  # optional; only patch if present
+        import shortuuid
     except Exception:
         return
 
-    counter = {"i": 0}
-    def fake_uuid():
-        counter["i"] += 1
-        return f"shortuuid-{counter['i']:04d}"
+    counter = {"value": 0}
 
-    monkeypatch.setattr(shortuuid, "uuid", fake_uuid, raising=True)
+    def fake_uuid_function():
+        counter["value"] += 1
+        return f"shortuuid-{counter['value']:04d}"
 
+    monkeypatch.setattr(shortuuid, "uuid", fake_uuid_function, raising=True)
 
-# ==================================================
-# Minimal transport zones + population asset fakes
-# ==================================================
+# ===========================================================
+# Fake transport zones and population asset fixtures
+# ===========================================================
 
 @pytest.fixture
 def fake_transport_zones(tmp_path):
-    """
-    Returns a tiny stand-in object with:
-      - .get() -> DataFrame with expected columns
-      - .cache_path -> Path needed by prepare_gtfs_router
-    NOTE: We avoid real GeoPandas geometry and spatial ops; tests that need
-    geospatial behavior will patch gpd.read_file / gpd.sjoin explicitly.
-    """
-    class FakeTransportZones:
+    class FakeTransportZonesClass:
         def __init__(self, cache_path):
             self.cache_path = cache_path
 
         def get(self):
-            # Keep it simple and deterministic; geometry is not used by our patched flows
-            return pd.DataFrame(
+            return pandas.DataFrame(
                 {
                     "transport_zone_id": [1, 2],
                     "urban_unit_category": ["A", "B"],
@@ -213,21 +179,16 @@ def fake_transport_zones(tmp_path):
             )
 
     cache_path = tmp_path / "transport_zones.gpkg"
-    return FakeTransportZones(cache_path=cache_path)
+    return FakeTransportZonesClass(cache_path=cache_path)
 
 
 @pytest.fixture
 def fake_population_asset(fake_transport_zones):
-    """
-    Tiny stand-in object that looks like an "asset" dependency.
-    - .inputs contains {"transport_zones": fake_transport_zones}
-    - .get() returns a DataFrame (or minimal object) as needed
-    """
-    class FakePopulationAsset:
+    class FakePopulationAssetClass:
         def __init__(self):
             self.inputs = {"transport_zones": fake_transport_zones}
 
         def get(self):
-            return pd.DataFrame({"population": [100, 200]})
+            return pandas.DataFrame({"population": [100, 200]})
 
-    return FakePopulationAsset()
+    return FakePopulationAssetClass()
